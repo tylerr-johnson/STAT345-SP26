@@ -1,0 +1,223 @@
+---
+title: "STAT 345 Midterm Project"
+date: "04/02/2026"
+author: "Tyler Johnson"
+output:
+  pdf_document: default
+  word_document: default
+  html_document:
+    code_folding: hide
+---
+
+```{r, message = FALSE, warning = FALSE}
+library(hoopR) #NBA play-by-play data
+library(sportyR) #Basketball court visualization
+library(tidyverse) #Data manipulation and plotting
+```
+
+```{r}
+nbaraw <- load_nba_pbp(seasons = 2010:2025) #pulling 15 years of data to see trends over time, going to last full recent year
+```
+
+```{r}
+#filter the raw NBA play-by-play data to only Timberwolves shot attempts
+wolves_shots <- nbaraw |>
+  select(
+    season, game_date, team_id, home_team_abbrev, away_team_abbrev,
+    shooting_play, scoring_play, type_text, text,
+    coordinate_x, coordinate_y
+  ) |>
+  filter(
+    home_team_abbrev == "MIN" | away_team_abbrev == "MIN", #only wolves games
+    team_id == 16, #Timberwolves: ID 16, offensive possessions only
+    shooting_play == TRUE, #shooting events only
+    !grepl("Free Throw", type_text), #no free throws
+    !is.na(coordinate_x), #remove observatiosn with missing coordinates
+    !is.na(coordinate_y),
+    abs(coordinate_x) > 2 | abs(coordinate_y) > 2 #removing coordinate errors near 0 that were causing problems
+  ) |>
+  mutate(
+    fold_x = -abs(coordinate_x), #folding both halves of observations onto one side
+    fold_y = coordinate_y,
+    plot_x = -fold_y, #rotating now to match the court orientation later
+    plot_y = fold_x,
+    shot_result = if_else(scoring_play, "Made", "Missed")
+  )
+```
+
+```{r}
+#building a half-court background using sportyR
+court <- geom_basketball(
+  league = "nba",
+  rotation = 90, #rotation 90 degrees to match our plot coordinates
+  xlims = c(-45, 0), #displaying offensive half court only
+  ylims = c(-45, 45),
+  color_updates = list(
+    offensive_half_court = "#F3D49B", #wood-type color
+    defensive_half_court = "#F3D49B",
+    painted_area         = c("#E8C47E", "#00000000"),
+    court_apron          = "#F7E6BE" #lighter border
+  )
+)
+```
+
+```{r}
+#binning shot locations and finding FG%, shot frequency per zone per season
+wolves_all_summary <- wolves_shots |>
+  mutate(
+    x_bin = round(plot_x / 3) * 3, #bin size of 3 chosen for best visibility
+    y_bin = round(plot_y / 3) * 3
+  ) |>
+  group_by(season, x_bin, y_bin) |> #grouping by season so that each year summarized
+  summarise(
+    fg_pct  = mean(shot_result == "Made"), #FG% per zone
+    n_shots = n(),
+    .groups = "drop"
+  ) |>
+  group_by(season) |>
+  mutate(
+    shot_pct = n_shots / sum(n_shots)  #shot frequency as proportion over each season
+  ) |>
+  ungroup()
+```
+
+```{r, fig.width = 16, fig.height = 10}
+#faceted shot chart by season showing FG% and shot frequency at each zone
+court +
+  geom_point(
+    data = wolves_all_summary,
+    aes(
+      x    = x_bin,
+      y    = y_bin,
+      fill = fg_pct, #color = FG%
+      size = shot_pct #size = shot volume
+    ),
+    shape  = 21, #a filled circle with no border
+    color  = "white", #thin white border to separate overlapping points
+    stroke = 0.2,
+    alpha  = 0.85,
+    inherit.aes = FALSE
+  ) +
+  facet_wrap(~ season, nrow = 4) + #facet here, number of rows we want
+  scale_fill_gradient2(
+    low      = "#FFFFFF",
+    mid      = "#78BE20", #type of Timberwolves green color
+    high     = "#0C2340", #type of Timberwolves navy color
+    midpoint = 0.40, #calling this as the middle here, about the leagues avg FG%
+    limits   = c(0, 1),
+    name     = "Field Goal %"
+  ) +
+  scale_size_continuous(
+    range  = c(1, 8),    # min/max point size
+    name   = "Shot Volume",
+    breaks = c(0.05, 0.10, 0.15, 0.20)
+  ) +
+  guides(
+  size = guide_legend(override.aes = list(fill = "#78BE20"))
+) +
+  labs(
+    title    = "Minnesota Timberwolves Shot Chart",
+    subtitle = "2010-2025 Seasons — Dot Size = Shot Volume, Color = Field Goal %",
+    x = NULL,
+    y = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid        = element_blank(),
+    axis.text         = element_blank(), #don't want raw labels on coordinates
+    axis.ticks        = element_blank(),
+    legend.position   = "right",
+    plot.title        = element_text(face = "bold", size = 14, color = "#0C2340"),
+    plot.subtitle     = element_text(size = 10, color = "darkgray")
+  )
+```
+
+## Key Findings
+
+-   The distribution of shot attempts has shifted progressively outward over time, with more attempts taken from the three-point range and beyond, and fewer from mid-range
+
+-   In earlier seasons, three-point attempts were clustered in specific zones, while recent seasons show attempts spread more uniformly across the entire arc
+
+-   Shot volume around the rim remains consistently the highest across all seasons
+
+-   Mid-range shots have declined steadily since 2016, as the team has prioritized higher-efficiency shot selection
+
+-   Despite the shift toward three-point shooting, the highest field goal percentages remain concentrated near the basket, suggesting rim attempts remain the most valuable shots on the floor
+
+## Detailed Findings
+
+-   **Outward Shift in Shot Distribution**
+
+Over the 2010-2025 period, the Minnesota Timberwolves have progressively moved away from the mid-range shot selection toward a more perimeter-oriented offense. The shift is clearly visible in the shot charts, where early seasons show dense clustering in the paint and spread across the mid-range to three-point arc, with later seasons showing significant activity beyond the arc. The evolution reflects a league-wide realignment toward shot types that analytics have found to have higher value, either at the rim or from three-point distance.
+
+-   **Evolution of Three-Point Arc Usage**
+
+Beyond just attempting more threes, the Timberwolves have also changed where those three-point attempts come from. Early seasons show attempts concentrated in corner zones, while as the NBA entered the 2020's displays a much more uniform distribution across the entire arc. The Timberwolves (and likely all/most other teams) have developed more structured offensive sets designed to create three-point opportunities from multiple areas of the floor rather than relying on corner opportunities alone.
+
+-   **Consistent Rim Pressure**
+
+Despite the significant changes in overall shot distribution, attempts at and around the rim have remained the highest volume zone on the floor in every season analyzed. This consistency suggests that regardless of the team's evolving perimeter strategy, getting to the basket has remained a core offensive priority. Maintaining high rim volume alongside increased three-point attempts reflects a balanced offensive approach that avoids over-relying on any single shot type.
+
+-   **Decline of Mid-Range**
+
+Beginning around 2016, mid-range shot attempts began a steady decline that continued through 2025. This aligns with the league-wide movement that identified mid-range shots as the least efficient shot type in basketball, as it offers lower conversion rates than rim attempts without the added value of three points. The Timberwolves' reduced mid-range volume suggests that the organization has adopted modern shot selections principles in building their offensive strategy.
+
+-   **Rim Efficiency vs. Three-Point Efficiency**
+
+Across all seasons analyzed, the darkest zones on the field goal percentage scale are consistently located near the basket, confirming that rim attempts convert at a higher rate than shots taken elsewhere. The Timberwolves exhibit a balance between high-volume three-point attempts and high-efficiency rim pressure. Three-point volume has increased significantly, while actually improving percentages. The Timberwolves went from a bottom two team in the NBA in three-point percentage in 2015 to a top 4 team in 2025.
+
+## Above and Beyond - 4-Point Line
+
+-   Using an expected value analysis on Minnesota Timberwolves shot data from 2022-2025 (recent years), we can determine where a 4-point arc would make the most strategic sense. For each distance zone expected value is calculated as field goal percentage multiplied by point value, so the distance where a 4-point attempt offers competitive expected value compared to existing shot types will define the optimal placement of the arc.
+
+```{r}
+#expected value analysis to determine optimal 4-point arc placement
+#using Wolves shots from 2022-2025 to reflect current team strategy
+#distance calculated from basket position at approximately x=39 in raw coordinates
+wolves_4pt <- wolves_shots |>
+  filter(season >= 2022) |>
+  mutate(distance = sqrt((abs(coordinate_x) - 39)^2 + coordinate_y^2)) |> #to get true distance from the basket
+  mutate(distance_bin = round(distance / 2) * 2) |> #bin every 2 feet
+  group_by(distance_bin) |>
+  summarise(
+    fg_pct  = mean(shot_result == "Made"),
+    n_shots = n(),
+    .groups = "drop"
+  ) |>
+  mutate(
+    ev_2pt = fg_pct * 2, #expected points if worth 2
+    ev_3pt = fg_pct * 3, #expected points if worth 3
+    ev_4pt = fg_pct * 4  #expected points if worth 4
+  ) |>
+  arrange(distance_bin)
+```
+
+-   Based on this analysis, a 4-point arc placed at 27 Feet from the basket offers the best value for the Timberwolves. At this distance, the team shoots about 36-38%, generating an expected value of roughly 1.47 points per attempt. Distances from beyond 27 feet drop off sharply, where at 30 feet FG% falls to just 20%, making it unrealistic. Distances closer to the three-point line (\~24 feet) already carry three-point value, so placing the arc any closer wouldn't change shot selection. The 27 feet is a sweet spot, far enough beyond the current three-point line to be meaningful, while close enough that players can still shoot at a reasonable percentage.
+
+-   The NBA currently has the three-point line at 23 feet, 9 inches from the center of basket at the top of the arc and 22 feet in the corner. A potential limitation of this analysis is that it includes the implementation of 27 feet to be universal across the arc, not distinguishing the differences. The proposed distance is well beyond both distances though, so it doesn't materially affect the recommendation.
+
+### Player Impact
+
+```{r}
+#how would this impact a player like Anthony Edwards?
+#calculate Anthony Edwards shot consequence if 4-point line at 27 feet
+ant_4pt <- wolves_shots |>
+  filter(season == 2025) |>  # use just 2025 for a clean single season consequence
+  filter(grepl("Anthony Edwards", text)) |> #only Anthony Edward shots 
+  mutate(distance = sqrt((abs(coordinate_x) - 39)^2 + coordinate_y^2)) |>
+  filter(distance >= 27) |>  # shots that would be 4-pointers under new arc
+  summarise(
+    total_attempts  = n(),
+    total_made      = sum(shot_result == "Made"),
+    current_pts     = total_made * 3,  #currently worth 3
+    new_pts         = total_made * 4,  #would be worth 4
+    pt_increase     = new_pts - current_pts,
+    pct_increase    = (pt_increase / current_pts) * 100
+  )
+```
+
+-   To illustrate the impact of the 4-point line, taking a look at Anthony Edwards and his 2025 season can be valuable. He is the Timberwolves primary perimeter scorer and one of the most explosive offensive players in the league. He is an ideal candidate to benefit from a 4-point line.
+
+-   In the 2025 season, Edwards attempted 46 shots from 27 feet or beyond, making 15 of them. Under the current scoring system those made shots generated 45 points. With a 4-point line in place they would have generated 60 points, adding 15 points to his season total in 2025.
+
+-   Players like Edwards who already possess the range and confidence to shoot from distance would immediately benefit without changing their shot selection. This wold also incentivize the Timberwolves and other teams to develop more long-range shooters, shifting even more how offenses are constructed.
